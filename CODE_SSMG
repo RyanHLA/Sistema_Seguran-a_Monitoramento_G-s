@@ -1,0 +1,222 @@
+// Bibliotecas necessárias
+#include <Servo.h>
+#include <SoftwareSerial.h>
+
+// Definição dos pinos
+#define PIN_TRIGGER 7
+#define PIN_ECHO 6
+#define PIN_SERVO 9
+#define PIN_GAS A0
+#define PIN_BUZZER 8
+#define PIN_LED_RED 4
+#define PIN_LED_GREEN 5
+#define PIN_BT_TX 2
+#define PIN_BT_RX 3
+
+// Constantes
+#define GAS_THRESHOLD 50     // Valor ajustado para sensibilidade do sensor
+#define DISTANCE_THRESHOLD 300  // 3 metros em centímetros
+#define SCAN_DELAY 50       // Delay entre leituras do sensor em ms
+#define BAUD_RATE 38400    // Taxa de transmissão padrão do HC-05
+
+// Objetos
+Servo servoMotor;
+SoftwareSerial bluetooth(PIN_BT_TX, PIN_BT_RX);
+
+// Variáveis globais
+int gasLevel = 0;
+bool personDetected = false;
+bool gasDetected = false;
+unsigned long lastNotificationTime = 0;
+const unsigned long NOTIFICATION_DELAY = 5000; // 5 segundos entre notificações
+int servoDirection = 1; // 1 para direita, -1 para esquerda
+int currentAngle = 0;   // Posição atual do servo
+
+void setup() {
+  // Inicialização da comunicação serial
+  Serial.begin(9600);
+  bluetooth.begin(BAUD_RATE);
+  
+  // Configuração dos pinos
+  pinMode(PIN_TRIGGER, OUTPUT);
+  pinMode(PIN_ECHO, INPUT);
+  pinMode(PIN_BUZZER, OUTPUT);
+  pinMode(PIN_LED_RED, OUTPUT);
+  pinMode(PIN_LED_GREEN, OUTPUT);
+  
+  // Inicialização do servo
+  servoMotor.attach(PIN_SERVO);
+  servoMotor.write(0);
+  
+  // Teste inicial dos componentes
+  testComponents();
+  
+  // Mensagem inicial
+  Serial.println("Sistema de monitoramento iniciado!");
+  bluetooth.println("Sistema de monitoramento iniciado!");
+}
+
+void testComponents() {
+  // Teste dos LEDs
+  digitalWrite(PIN_LED_RED, HIGH);
+  delay(500);
+  digitalWrite(PIN_LED_RED, LOW);
+  digitalWrite(PIN_LED_GREEN, HIGH);
+  delay(500);
+  digitalWrite(PIN_LED_GREEN, LOW);
+  
+  // Teste do buzzer
+  digitalWrite(PIN_BUZZER, HIGH);
+  delay(200);
+  digitalWrite(PIN_BUZZER, LOW);
+  
+  // Teste do servo
+  servoMotor.write(90);
+  delay(500);
+  servoMotor.write(0);
+}
+
+void loop() {
+  // Leitura do sensor de gás
+  checkGasLevel();
+  
+  // Se detectar gás, inicia o protocolo de segurança
+  if (gasDetected) {
+    activateAlarm();
+    scanArea();
+    updateLEDs();
+    
+    // Envia notificação apenas a cada NOTIFICATION_DELAY ms
+    if (millis() - lastNotificationTime >= NOTIFICATION_DELAY) {
+      sendBluetoothNotification();
+      lastNotificationTime = millis();
+    }
+  } else {
+    deactivateAlarm();
+    digitalWrite(PIN_LED_RED, LOW);
+    digitalWrite(PIN_LED_GREEN, LOW);
+    
+    // Continua a varredura mesmo sem gás detectado
+    scanArea();
+  }
+  
+  // Debug via Serial
+  printDebugInfo();
+  
+  delay(100);
+}
+
+void checkGasLevel() {
+  gasLevel = analogRead(PIN_GAS);
+  gasDetected = (gasLevel > GAS_THRESHOLD);
+  
+  Serial.print("Nível de gás: ");
+  Serial.println(gasLevel);
+}
+
+void scanArea() {
+  personDetected = false;
+  
+  // Movimento de ida (0° a 180°) ou volta (180° a 0°)
+  if (servoDirection == 1) {
+    // Movimento para direita
+    currentAngle += 30;
+    if (currentAngle >= 180) {
+      currentAngle = 180;
+      servoDirection = -1; // Muda direção para esquerda
+    }
+  } else {
+    // Movimento para esquerda
+    currentAngle -= 30;
+    if (currentAngle <= 0) {
+      currentAngle = 0;
+      servoDirection = 1; // Muda direção para direita
+    }
+  }
+  
+  // Move o servo para a nova posição
+  servoMotor.write(currentAngle);
+  delay(SCAN_DELAY);
+  
+  // Mede a distância na posição atual
+  float distance = measureDistance();
+  
+  // Debug da varredura
+  Serial.print("Ângulo: ");
+  Serial.print(currentAngle);
+  Serial.print("° | Distância: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+  
+  // Verifica se detectou pessoa
+  if (distance < DISTANCE_THRESHOLD && distance > 0) {
+    personDetected = true;
+  }
+}
+
+float measureDistance() {
+  // Gera pulso ultrassônico
+  digitalWrite(PIN_TRIGGER, LOW);
+  delayMicroseconds(2);
+  digitalWrite(PIN_TRIGGER, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(PIN_TRIGGER, LOW);
+  
+  // Calcula a distância
+  long duration = pulseIn(PIN_ECHO, HIGH);
+  float distance = duration * 0.034 / 2;
+  
+  return distance;
+}
+
+void activateAlarm() {
+  // Padrão de alarme mais distintivo
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(PIN_BUZZER, HIGH);
+    delay(100);
+    digitalWrite(PIN_BUZZER, LOW);
+    delay(100);
+  }
+}
+
+void deactivateAlarm() {
+  digitalWrite(PIN_BUZZER, LOW);
+}
+
+void updateLEDs() {
+  if (personDetected) {
+    digitalWrite(PIN_LED_RED, HIGH);
+    digitalWrite(PIN_LED_GREEN, LOW);
+  } else {
+    digitalWrite(PIN_LED_RED, LOW);
+    digitalWrite(PIN_LED_GREEN, HIGH);
+  }
+}
+
+void sendBluetoothNotification() {
+  if (personDetected) {
+    bluetooth.println("ALERTA CRÍTICO: Vazamento de gás detectado! Há pessoas na área!");
+    bluetooth.print("Nível de gás: ");
+    bluetooth.println(gasLevel);
+    bluetooth.print("Ângulo de detecção: ");
+    bluetooth.println(currentAngle);
+  } else {
+    bluetooth.println("ALERTA: Vazamento de gás detectado! Área livre de pessoas.");
+    bluetooth.print("Nível de gás: ");
+    bluetooth.println(gasLevel);
+  }
+}
+
+void printDebugInfo() {
+  Serial.println("=== Status do Sistema ===");
+  Serial.print("Nível de gás: ");
+  Serial.println(gasLevel);
+  Serial.print("Gás detectado: ");
+  Serial.println(gasDetected ? "Sim" : "Não");
+  Serial.print("Pessoas detectadas: ");
+  Serial.println(personDetected ? "Sim" : "Não");
+  Serial.print("Posição atual do servo: ");
+  Serial.print(currentAngle);
+  Serial.println("°");
+  Serial.println("=====================");
+}
